@@ -10,6 +10,20 @@ const Controller = {
     });
   },
 
+  loadMore: (ev) => {
+    ev.preventDefault();
+    fetch('/loadMore').then((response) => {
+      response.json().then((results) => {
+        const table = document.getElementById("table-body");
+        let existingRows = table.innerHTML; // Get current HTML of the table
+        for (let result of results) {
+          existingRows += `<tr><td>${result}</td></tr>`; // Append new rows
+        }
+        table.innerHTML = existingRows;
+      });
+    });
+  },
+
   updateTable: (results) => {
     const table = document.getElementById("table-body");
     const rows = [];
@@ -21,4 +35,6 @@ const Controller = {
 };
 
 const form = document.getElementById("form");
+const loadMoreBtn = document.getElementById("load-more");
 form.addEventListener("submit", Controller.search);
+loadMoreBtn.addEventListener("click", Controller.loadMore);

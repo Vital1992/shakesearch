@@ -9,7 +9,10 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"regexp"
 )
+
+var pagination Pagination
 
 func main() {
 	searcher := Searcher{}
@@ -21,7 +24,23 @@ func main() {
 	fs := http.FileServer(http.Dir("./static"))
 	http.Handle("/", fs)
 
-	http.HandleFunc("/search", handleSearch(searcher))
+	http.HandleFunc("/search", func(w http.ResponseWriter, r *http.Request) {
+        enableCors(&w)
+        if r.Method == "OPTIONS" {
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+        handleSearch(searcher)(w, r)
+    })
+
+	http.HandleFunc("/loadMore", func(w http.ResponseWriter, r *http.Request) {
+        enableCors(&w)
+        if r.Method == "OPTIONS" {
+            w.WriteHeader(http.StatusOK)
+            return
+        }
+        loadMore()(w, r)
+    })
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -35,9 +54,18 @@ func main() {
 	}
 }
 
+func enableCors(w *http.ResponseWriter) {
+    (*w).Header().Set("Access-Control-Allow-Origin", "*")
+    (*w).Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+}
+
 type Searcher struct {
 	CompleteWorks string
 	SuffixArray   *suffixarray.Index
+}
+
+type Pagination struct {
+	data   []string
 }
 
 func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
@@ -62,6 +90,31 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 	}
 }
 
+func loadMore() func(w http.ResponseWriter, r *http.Request) {
+	return func(w http.ResponseWriter, r *http.Request) {
+
+		results := pagination.data
+
+		if len(results) > 20 {
+			pagination.data = results[21:]
+			results = results[:20]
+		} else {
+			pagination.data = []string{}
+		}
+
+		buf := &bytes.Buffer{}
+		enc := json.NewEncoder(buf)
+		err := enc.Encode(results)
+		if err != nil {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte("encoding failure"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Write(buf.Bytes())
+	}
+}
+
 func (s *Searcher) Load(filename string) error {
 	dat, err := ioutil.ReadFile(filename)
 	if err != nil {
@@ -73,10 +126,50 @@ func (s *Searcher) Load(filename string) error {
 }
 
 func (s *Searcher) Search(query string) []string {
-	idxs := s.SuffixArray.Lookup([]byte(query), -1)
-	results := []string{}
-	for _, idx := range idxs {
-		results = append(results, s.CompleteWorks[idx-250:idx+250])
+	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(query))
+    idxs := re.FindAllIndex([]byte(s.CompleteWorks), -1)
+
+    results := []string{}
+    var lastStart, lastEnd int = -1, -1
+
+    for _, idx := range idxs {
+		startIdx := max(0, idx[0]-250)
+        endIdx := min(len(s.CompleteWorks), idx[0]+250)
+
+        // Merge overlapping or adjacent segments
+        if startIdx <= lastEnd {
+            lastEnd = endIdx
+        } else {
+            if lastStart != -1 {
+                results = append(results, s.CompleteWorks[lastStart:lastEnd])
+            }
+            lastStart, lastEnd = startIdx, endIdx
+        }
+    }
+    
+    // Add the last segment if it exists
+    if lastStart != -1 {
+        results = append(results, s.CompleteWorks[lastStart:lastEnd])
+    }
+
+	if len(results) > 20 {
+		pagination.data = results[20:]
+		return results[:20]
 	}
-	return results
+
+    return results
+}
+
+func max(a, b int) int {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+func min(a, b int) int {
+    if a < b {
+        return a
+    }
+    return b
 }
