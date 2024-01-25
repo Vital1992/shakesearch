@@ -115,7 +115,7 @@ func loadMore(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
 		results := searcher.Search(pageQuery, false)
 
 		if len(results) > pageQueryInt {
-			cookieIndex := http.Cookie{Name: "pageIndex", Value: strconv.Itoa(pageQueryInt)}
+			cookieIndex := http.Cookie{Name: "pageIndex", Value: strconv.Itoa(pageQueryInt + 20)}
 			http.SetCookie(w, &cookieIndex)
 			cookieQuery := http.Cookie{Name: "query", Value: pageQuery}
 			http.SetCookie(w, &cookieQuery)
