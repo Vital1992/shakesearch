@@ -10,9 +10,8 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 )
-
-var pagination Pagination
 
 func main() {
 	searcher := Searcher{}
@@ -39,7 +38,7 @@ func main() {
             w.WriteHeader(http.StatusOK)
             return
         }
-        loadMore()(w, r)
+        loadMore(searcher)(w, r)
     })
 
 	port := os.Getenv("PORT")
@@ -64,10 +63,6 @@ type Searcher struct {
 	SuffixArray   *suffixarray.Index
 }
 
-type Pagination struct {
-	data   []string
-}
-
 func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
 		query, ok := r.URL.Query()["q"]
@@ -76,7 +71,12 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 			w.Write([]byte("missing search query in URL params"))
 			return
 		}
-		results := searcher.Search(query[0])
+		cookieIndex := http.Cookie{Name: "pageIndex", Value: "20"}
+        http.SetCookie(w, &cookieIndex)
+		cookieQuery := http.Cookie{Name: "query", Value: query[0]}
+        http.SetCookie(w, &cookieQuery)
+
+		results := searcher.Search(query[0], true)
 		buf := &bytes.Buffer{}
 		enc := json.NewEncoder(buf)
 		err := enc.Encode(results)
@@ -90,16 +90,42 @@ func handleSearch(searcher Searcher) func(w http.ResponseWriter, r *http.Request
 	}
 }
 
-func loadMore() func(w http.ResponseWriter, r *http.Request) {
+func loadMore(searcher Searcher) func(w http.ResponseWriter, r *http.Request) {
 	return func(w http.ResponseWriter, r *http.Request) {
+		index, indexErr := r.Cookie("pageIndex")
+		if indexErr != nil {
+			fmt.Println("No cookied found")
+			return
+		}
+		pageIndex := index.Value
 
-		results := pagination.data
+		query, queryErr := r.Cookie("query")
+		if queryErr != nil {
+			fmt.Println("No cookied found")
+			return
+		}
+		pageQuery := query.Value
 
-		if len(results) > 20 {
-			pagination.data = results[21:]
-			results = results[:20]
+		pageQueryInt, convErr := strconv.Atoi(pageIndex)
+
+		if convErr != nil {
+			fmt.Println("Error")
+			return
+		}
+		results := searcher.Search(pageQuery, false)
+
+		if len(results) > pageQueryInt {
+			cookieIndex := http.Cookie{Name: "pageIndex", Value: strconv.Itoa(pageQueryInt + 21)}
+			http.SetCookie(w, &cookieIndex)
+			cookieQuery := http.Cookie{Name: "query", Value: pageQuery}
+			http.SetCookie(w, &cookieQuery)
+			maxLength := 20
+			if len(results[pageQueryInt:]) < 20 {
+				maxLength = len(results[pageQueryInt:])
+			}
+			results = results[pageQueryInt:pageQueryInt + maxLength]
 		} else {
-			pagination.data = []string{}
+			results = []string{}
 		}
 
 		buf := &bytes.Buffer{}
@@ -125,7 +151,7 @@ func (s *Searcher) Load(filename string) error {
 	return nil
 }
 
-func (s *Searcher) Search(query string) []string {
+func (s *Searcher) Search(query string, initialSearch bool) []string {
 	re := regexp.MustCompile(`(?i)` + regexp.QuoteMeta(query))
     idxs := re.FindAllIndex([]byte(s.CompleteWorks), -1)
 
@@ -152,8 +178,7 @@ func (s *Searcher) Search(query string) []string {
         results = append(results, s.CompleteWorks[lastStart:lastEnd])
     }
 
-	if len(results) > 20 {
-		pagination.data = results[20:]
+	if (initialSearch && len(results) > 20) {
 		return results[:20]
 	}
 
